@@ -567,13 +567,19 @@ async fn handle_webhook(
         return axum::Json(serde_json::json!({"challenge": challenge})).into_response();
     }
 
-    // Verification token check (for non-encrypted plaintext events)
+    // Verification token check (for non-encrypted plaintext events, and
+    // decrypted encrypted events). The token arrives top-level on v1.0
+    // shapes and url_verification probes, at `header.token` on v2.0
+    // envelopes — accept either. On an armed channel a MISSING or empty
+    // token is refused exactly like a wrong one (#2756): absent must not
+    // mean verified.
     if let Some(ref vt) = state.verification_token {
         let event_token = event_json
             .get("token")
+            .or_else(|| event_json.pointer("/header/token"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if !event_token.is_empty() && !constant_time_eq(event_token.as_bytes(), vt.as_bytes()) {
+        if event_token.is_empty() || !constant_time_eq(event_token.as_bytes(), vt.as_bytes()) {
             warn!("Feishu webhook: verification token mismatch");
             return (
                 axum::http::StatusCode::FORBIDDEN,
@@ -2143,12 +2149,13 @@ mod tests {
         );
     }
 
-    // ---- Verification token check regression tests (#2751) ----
+    // ---- Verification token check regression tests (#2751, #2756) ----
     //
-    // The plaintext-event token compare now goes through the canonical
-    // constant-time helper; these pin the behavioral contract it must
-    // keep: a non-empty wrong token is refused, a correct token and a
-    // missing/empty token still forward (the pre-existing acceptance).
+    // The plaintext-event token compare goes through the canonical
+    // constant-time helper. The armed-channel contract (#2756): a MISSING
+    // or empty token is refused exactly like a wrong one — a configured
+    // verification_token means credential-less events never forward. The
+    // unarmed-channel passthrough stays unchanged.
 
     fn webhook_state_with_verification_token() -> (WebhookState, mpsc::Receiver<serde_json::Value>)
     {
@@ -2186,14 +2193,153 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn feishu_webhook_without_event_token_still_forwards() {
+    async fn feishu_webhook_without_event_token_is_rejected() {
         let (state, mut rx) = webhook_state_with_verification_token();
-        // Pre-existing acceptance: a plaintext event with no token field
-        // is forwarded (older event shapes / url_verification probes).
+        // #2756: an armed channel must not treat an absent token field as
+        // verified — the missing credential is refused like a wrong one.
+        let body = r#"{"type":"event_callback","event":{}}"#;
+
+        let status = call_handle_webhook(state, build_headers(&[]), body).await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::FORBIDDEN,
+            "an armed channel must refuse an event with no token field"
+        );
+        assert!(rx.try_recv().is_err(), "refused event must not forward");
+    }
+
+    #[tokio::test]
+    async fn feishu_webhook_with_empty_event_token_is_rejected() {
+        let (state, mut rx) = webhook_state_with_verification_token();
+        let body = r#"{"type":"event_callback","token":"","event":{}}"#;
+
+        let status = call_handle_webhook(state, build_headers(&[]), body).await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::FORBIDDEN,
+            "an armed channel must refuse an empty verification token"
+        );
+        assert!(rx.try_recv().is_err(), "refused event must not forward");
+    }
+
+    #[tokio::test]
+    async fn feishu_webhook_v2_envelope_with_header_token_forwards() {
+        let (state, mut rx) = webhook_state_with_verification_token();
+        // v2.0 envelopes carry the verification token at `header.token` —
+        // the only shape `parse_event` dispatches — so the armed check must
+        // accept it there (#2756 review).
+        let body = r#"{"schema":"2.0","header":{"event_type":"im.message.receive_v1","token":"octos-vt-secret"},"event":{}}"#;
+
+        let status = call_handle_webhook(state, build_headers(&[]), body).await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert!(rx.try_recv().is_ok(), "verified v2 push should forward");
+    }
+
+    #[tokio::test]
+    async fn feishu_webhook_v2_envelope_with_wrong_header_token_is_rejected() {
+        let (state, mut rx) = webhook_state_with_verification_token();
+        let body = r#"{"schema":"2.0","header":{"event_type":"im.message.receive_v1","token":"forged"},"event":{}}"#;
+
+        let status = call_handle_webhook(state, build_headers(&[]), body).await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+        assert!(rx.try_recv().is_err(), "refused event must not forward");
+    }
+
+    #[tokio::test]
+    async fn feishu_webhook_with_non_string_token_is_rejected() {
+        let (state, mut rx) = webhook_state_with_verification_token();
+        // A non-string token fails `.as_str()` and must not fall through as
+        // verified.
+        let body = r#"{"type":"event_callback","token":12345,"event":{}}"#;
+
+        let status = call_handle_webhook(state, build_headers(&[]), body).await;
+        assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+        assert!(rx.try_recv().is_err(), "refused event must not forward");
+    }
+
+    #[tokio::test]
+    async fn feishu_webhook_without_configured_token_still_forwards() {
+        let (tx, mut rx) = mpsc::channel::<serde_json::Value>(8);
+        let state = WebhookState {
+            encrypt_key: None,
+            verification_token: None,
+            inbound_tx: tx,
+        };
+        // Unarmed deployment: no verification_token configured, the
+        // passthrough contract is unchanged (#2756).
         let body = r#"{"type":"event_callback","event":{}}"#;
 
         let status = call_handle_webhook(state, build_headers(&[]), body).await;
         assert_eq!(status, axum::http::StatusCode::OK);
-        assert!(rx.try_recv().is_ok(), "tokenless event should forward");
+        assert!(rx.try_recv().is_ok(), "unarmed channel should forward");
+    }
+
+    /// Mount the same one-route Router `start_webhook` serves and drive it
+    /// over a real TCP socket, so the status codes above are observed the
+    /// way Lark's push observes them (real HTTP framing, axum extractors,
+    /// handler, inbound forwarding).
+    async fn spawn_webhook_router(
+        verification_token: Option<&str>,
+    ) -> (std::net::SocketAddr, mpsc::Receiver<serde_json::Value>) {
+        let (tx, rx) = mpsc::channel::<serde_json::Value>(8);
+        let state = WebhookState {
+            encrypt_key: None,
+            verification_token: verification_token.map(String::from),
+            inbound_tx: tx,
+        };
+        let app = axum::Router::new()
+            .route("/webhook/event", axum::routing::post(handle_webhook))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+        (addr, rx)
+    }
+
+    async fn post_webhook_event(addr: std::net::SocketAddr, body: &str) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "POST /webhook/event HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let head = String::from_utf8_lossy(&response);
+        head.split_whitespace()
+            .nth(1)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("no status line in response: {head}"))
+    }
+
+    #[tokio::test]
+    async fn feishu_webhook_http_path_enforces_armed_token_over_real_tcp() {
+        let event_without_token = r#"{"type":"event_callback","event":{}}"#;
+
+        // Armed channel: the credential-less push is refused on the wire and
+        // nothing reaches the inbound bus (#2756's fail-open, before/after).
+        let (addr, mut rx) = spawn_webhook_router(Some("octos-vt-secret")).await;
+        assert_eq!(post_webhook_event(addr, event_without_token).await, 403);
+        assert!(rx.try_recv().is_err(), "refused push must not forward");
+        let signed = r#"{"type":"event_callback","token":"octos-vt-secret","event":{}}"#;
+        assert_eq!(post_webhook_event(addr, signed).await, 200);
+        assert!(rx.try_recv().is_ok(), "verified push should forward");
+
+        // The v2.0 envelope Lark actually pushes (token at `header.token`)
+        // is accepted over the wire, and a credential-less v2 push is not.
+        let v2_unsigned =
+            r#"{"schema":"2.0","header":{"event_type":"im.message.receive_v1"},"event":{}}"#;
+        assert_eq!(post_webhook_event(addr, v2_unsigned).await, 403);
+        assert!(rx.try_recv().is_err(), "refused push must not forward");
+        let v2_signed = r#"{"schema":"2.0","header":{"event_type":"im.message.receive_v1","token":"octos-vt-secret"},"event":{}}"#;
+        assert_eq!(post_webhook_event(addr, v2_signed).await, 200);
+        assert!(rx.try_recv().is_ok(), "verified v2 push should forward");
+
+        // Unarmed channel: the passthrough contract is unchanged.
+        let (addr, mut rx) = spawn_webhook_router(None).await;
+        assert_eq!(post_webhook_event(addr, event_without_token).await, 200);
+        assert!(rx.try_recv().is_ok(), "unarmed channel should forward");
     }
 }
