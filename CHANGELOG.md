@@ -12,11 +12,26 @@ All notable changes to octos will be documented in this file.
 - Use native research with shared provider credentials instead of the retired DOT research pipeline.
 - Preserve long-session context with incremental checkpoints and use the session's selected model for both automatic and manual compaction.
 - Append ordinary model-loop context changes instead of rewriting the full checkpoint before each model request; rotate transition journals at an 8 MiB byte budget (#2793).
-- Include the accumulated provider, skill discovery, session recovery, host-owned app isolation and OUP compatibility fixes from the release candidates.
+- Include provider, skill discovery, session recovery, host-owned app isolation and OUP compatibility fixes from the release candidates and subsequent main-branch changes.
 
 This stable release pairs with OctosCode 0.3.1. Release bundles include the
 server, sandbox helper and bundled skills for macOS ARM64, Linux x64/ARM64
 and Windows x64.
+
+### Security
+
+- Enforce connection ownership when registering, unregistering or replacing peer and session tool routes, preventing another connection from taking over a live route (#2690).
+- Apply the configured API-channel authentication token across chat, event streams and the other API routes; remove token-length and local-path disclosures from admin-shell authentication failures (#2735, #2752, #2753).
+- Consolidate constant-time credential comparisons and use them for Feishu tokens and Twilio/WeCom signatures (#2752, #2753, #2754).
+- Reject untrusted Host headers and cross-site Origins on the API channel, and reject duplicate Host headers on host-managed servers (#2755, #2759).
+- Reject credential-less Feishu events when webhook authentication is configured, treat empty encryption keys as unconfigured, and enforce signature timestamp freshness with a matching deduplication window (#2760, #2774, #2775).
+- Bind Matrix appservices to loopback by default, restrict generated registration files to their owner on Unix, and deprecate query-string token authentication in favor of bearer headers (#2733).
+- Update h2, tar and rand to versions addressing the dependency advisories tracked in #2744.
+
+### Fixed
+
+- Reclaim stale workspace-team members at the team cap while preserving live connections and active turns, and fence coordinator changes when an old leader is evicted (#2766).
+- Retry transient memory-refresh lock setup failures so a temporary filesystem error does not disable refresh for the runtime's lifetime (#2767).
 
 ### Features
 
