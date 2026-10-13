@@ -3,6 +3,20 @@
 All notable changes to octos will be documented in this file.
 ## [Unreleased]
 
+## [2.0.3] - 2026-10-13
+
+### Highlights
+
+- Accept new instructions during an active turn: wake waiting model requests and reconsider tools that have not started yet.
+- Coordinate independently opened sessions in the same workspace through the shared kernel and peer messaging.
+- Use native research with shared provider credentials instead of the retired DOT research pipeline.
+- Preserve long-session context with incremental checkpoints and use the session's selected model for both automatic and manual compaction.
+- Include the accumulated provider, skill discovery, session recovery, host-owned app isolation and OUP compatibility fixes from the release candidates.
+
+This stable release pairs with OctosCode 0.3.1. Release bundles include the
+server, sandbox helper and bundled skills for macOS ARM64, Linux x64/ARM64
+and Windows x64.
+
 ### Features
 
 - Smart Home control — list and control smart-home devices (lights, thermostats, curtains, etc.) via a per-profile bridge (e.g. Home Assistant), through both the UI Protocol (`smart_home/*` WS methods, backing octos-web's Smart Home panel) and a new bundled `smart-home` agent skill (`smart_home_list_devices`, `smart_home_control_device`). Camera video streaming stays a human-facing, WebSocket-only feature and is not exposed to the agent.
