@@ -11,6 +11,7 @@ All notable changes to octos will be documented in this file.
 - Coordinate independently opened sessions in the same workspace through the shared kernel and peer messaging.
 - Use native research with shared provider credentials instead of the retired DOT research pipeline.
 - Preserve long-session context with incremental checkpoints and use the session's selected model for both automatic and manual compaction.
+- Append ordinary model-loop context changes instead of rewriting the full checkpoint before each model request; rotate transition journals at an 8 MiB byte budget (#2793).
 - Include the accumulated provider, skill discovery, session recovery, host-owned app isolation and OUP compatibility fixes from the release candidates.
 
 This stable release pairs with OctosCode 0.3.1. Release bundles include the
