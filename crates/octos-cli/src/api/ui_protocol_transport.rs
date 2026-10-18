@@ -48696,6 +48696,10 @@ mod peer_purge;
 mod tests;
 
 #[cfg(test)]
+#[path = "ui_protocol_monitor_expired_tests.rs"]
+mod monitor_expired_tests;
+
+#[cfg(test)]
 #[path = "ui_protocol_stalled_consumer_tests.rs"]
 mod stalled_consumer_tests;
 
