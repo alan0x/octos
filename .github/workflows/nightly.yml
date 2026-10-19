@@ -14,7 +14,12 @@ on:
 
 concurrency:
   group: nightly-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve active runs and queue up to 100 pending runs per ref. This
+  # prevents supersession by scheduled, manual, or workflow-file push runs;
+  # it does not prevent timeouts, runner failures, or manual cancellation.
+  # The 10-09 ARM/Windows legs hit their timeouts. Distinguishing those
+  # outcomes in reconciliation remains a separate follow-up.
+  queue: max
 
 permissions:
   contents: read

@@ -12,7 +12,13 @@ on:
 # Release artifacts are built by release.yml, not this workflow.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # PR updates cancel superseded runs. Main pushes and manual dispatches
+  # preserve the running workflow, but retain the default single pending
+  # slot: a third arrival can still replace the pending second run.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Multi-pending main runs remain a follow-up. A static queue:max would
+  # conflict with PR cancellation; the earlier queue:1 expression was also
+  # invalid (the accepted values are single and max).
 
 permissions:
   contents: read

@@ -13,7 +13,12 @@ permissions:
 
 concurrency:
   group: host-managed-sandbox-${{ github.ref }}
-  cancel-in-progress: true
+  # As in ci.yml, only PR updates cancel running workflows. Main pushes
+  # preserve the active confinement run with one pending slot; newer
+  # pending runs can still replace older pending runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Multi-pending main runs remain a follow-up. queue:max cannot coexist
+  # with the PR event's cancel-in-progress:true policy.
 
 jobs:
   confinement:
