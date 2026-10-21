@@ -28,7 +28,7 @@ background model scheduler, deployment or publication is included. Full product
 integration and model-quality/latency acceptance remain separate work. Handling
 arbitrary in-flight regeneration of deleted information is not a requirement.
 
-## Validation
+## Validation of reviewed candidate b0acfe04
 
 Executed on macOS against the candidate source:
 
@@ -66,3 +66,32 @@ memory write, browser/course integration or power-loss test is implied.
   It serializes concurrent nomination, but does not make the existing separate
   staging/marking writes transactional across process failure. Guard-rejected
   promotion notes are skipped by the existing function and not counted.
+
+## Independent review follow-up
+
+The independent review approved f28aeebc..b0acfe04 for an upstream PR and
+reproduced all validation counts above. It identified one non-blocking issue:
+a host correction can survive deletion of its target and keep inviting invalid
+updates on later consolidation attempts. A new regression failed on the
+reviewed code before the fix.
+
+Before a merge, the consolidator now retires only host corrections with an
+explicit replaces_id absent from live memory, archive files and pending-confirm
+candidates. This also runs when model merging is disabled. Retirement records a
+reason in the outcome, preserves unrelated requests, and leaves acceptance
+receipts intact so retries do not recreate the obsolete correction. Other host
+asks and model-origin corrections keep their existing lifecycle. This does not
+implement a general barrier against in-flight regeneration of forgotten data.
+
+Four added regressions cover deletion followed by cancellation (with unrelated
+work still succeeding), recovery of a previously orphaned correction, archive
+preservation, and retention of other note classes. The focused pipeline suite
+now has 11 tests; the CLI memory filter has 245 passing tests. The follow-up
+also clarifies that has_staging_request can publish a prepared note during
+recovery; no public helper is renamed.
+
+Follow-up validation passed: `cargo test -p octos-cli --features api --lib
+app_pipeline_tests` (11), the same command with `memory_` (245),
+`cargo clippy -p octos-cli --features api --lib --tests -- -D warnings`
+(zero warnings), formatting and diff checks. The independent approval applies
+to b0acfe04; the follow-up remains a separate, reviewable commit.

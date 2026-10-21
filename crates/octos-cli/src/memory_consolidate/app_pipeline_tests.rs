@@ -371,3 +371,207 @@ async fn should_apply_an_exact_host_forget_without_spending_model_budget() {
     assert!(!memory.contains("Prefers long chapters."));
     assert!(memory.contains("Likes nature books."));
 }
+
+#[tokio::test]
+async fn should_cancel_a_host_correction_after_its_target_is_forgotten() {
+    let mut store = AppStore::new().await;
+    store.seed_memory().await;
+    let correction = StagingNote {
+        origin: octos_memory::NoteOrigin::Host,
+        kind: octos_memory::NoteKind::Correction,
+        content: "Now prefers short chapters.".into(),
+        session_key: None,
+        sensitive: false,
+        replaces_id: Some("^maaaaaa".into()),
+    };
+    store
+        .bank
+        .write_staging_request("correct-before-forget", &correction)
+        .await
+        .unwrap();
+    let correction_id = store.notes()[0].id.clone();
+    let mut unrelated = correction.clone();
+    unrelated.content = "Now likes history books.".into();
+    unrelated.replaces_id = Some("^mbbbbbb".into());
+    store.bank.write_staging_note(&unrelated).await.unwrap();
+    store
+        .bank
+        .write_staging_note(&StagingNote {
+            origin: octos_memory::NoteOrigin::Host,
+            kind: octos_memory::NoteKind::Forget,
+            content: "id:^maaaaaa".into(),
+            session_key: None,
+            sensitive: false,
+            replaces_id: None,
+        })
+        .await
+        .unwrap();
+    store.params.allow_merge = false;
+    let provider = ScriptedMerge::new(vec![]);
+    let outcome = run_consolidation(provider.clone(), &store.params)
+        .await
+        .unwrap();
+    assert!(outcome.hard_deleted.contains(&"^maaaaaa".to_string()));
+    assert!(
+        outcome
+            .dropped
+            .iter()
+            .any(|(id, reason)| id == &correction_id && reason.contains("target no longer exists"))
+    );
+    assert_eq!(provider.calls(), 0);
+    let remaining = store.notes();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].replaces_id.as_deref(), Some("^mbbbbbb"));
+    // Retrying the original accepted request must not bring the cancelled ask back.
+    store
+        .bank
+        .write_staging_request("correct-before-forget", &correction)
+        .await
+        .unwrap();
+    assert_eq!(store.notes().len(), 1);
+    store.params.allow_merge = true;
+    let reply = serde_json::json!({
+        "ops":[{"op":"update", "id":"^mbbbbbb", "new_text":"Now likes history books.", "sources":[remaining[0].id]}],
+        "consumed_ids":[remaining[0].id], "dropped":[]
+    }).to_string();
+    let provider = ScriptedMerge::new(vec![reply]);
+    let outcome = run_consolidation(provider.clone(), &store.params)
+        .await
+        .unwrap();
+    assert!(outcome.merge_applied, "{:?}", outcome.errors);
+    assert_eq!(provider.calls(), 1);
+    assert!(store.notes().is_empty());
+    let outcome = run_consolidation(provider.clone(), &store.params)
+        .await
+        .unwrap();
+    assert!(outcome.errors.is_empty());
+    assert_eq!(
+        provider.calls(),
+        1,
+        "later passes must not retry the deleted target"
+    );
+    let memory = store.bank.read_long_term().await.unwrap();
+    assert!(!memory.contains("^maaaaaa"));
+    assert!(memory.contains("Now likes history books."));
+}
+
+#[tokio::test]
+async fn should_keep_host_corrections_whose_target_survives_in_the_archive() {
+    let mut store = AppStore::new().await;
+    std::fs::create_dir_all(store.params.memory_dir.join("archive")).unwrap();
+    std::fs::write(
+        store.params.memory_dir.join("archive/2026-10.md"),
+        "Prefers long chapters. (updated: 2026-10-20) ^maaaaaa\n",
+    )
+    .unwrap();
+    store
+        .bank
+        .write_staging_note(&StagingNote {
+            origin: octos_memory::NoteOrigin::Host,
+            kind: octos_memory::NoteKind::Correction,
+            content: "Now prefers short chapters.".into(),
+            session_key: None,
+            sensitive: false,
+            replaces_id: Some("^maaaaaa".into()),
+        })
+        .await
+        .unwrap();
+    store.params.allow_merge = false;
+    let provider = ScriptedMerge::new(vec![]);
+    let outcome = run_consolidation(provider.clone(), &store.params)
+        .await
+        .unwrap();
+    assert!(outcome.dropped.is_empty());
+    assert_eq!(store.notes().len(), 1);
+    assert_eq!(provider.calls(), 0);
+}
+
+#[tokio::test]
+async fn should_only_cancel_host_corrections_with_an_explicit_missing_target() {
+    let mut store = AppStore::new().await;
+    for (origin, kind, target) in [
+        (
+            octos_memory::NoteOrigin::Host,
+            octos_memory::NoteKind::UserRequest,
+            None,
+        ),
+        (
+            octos_memory::NoteOrigin::Host,
+            octos_memory::NoteKind::Correction,
+            None,
+        ),
+        (
+            octos_memory::NoteOrigin::Model,
+            octos_memory::NoteKind::Correction,
+            Some("^maaaaaa".into()),
+        ),
+    ] {
+        store
+            .bank
+            .write_staging_note(&StagingNote {
+                origin,
+                kind,
+                content: "Now prefers short chapters.".into(),
+                session_key: None,
+                sensitive: false,
+                replaces_id: target,
+            })
+            .await
+            .unwrap();
+    }
+    store.params.allow_merge = false;
+    let provider = ScriptedMerge::new(vec![]);
+    let outcome = run_consolidation(provider.clone(), &store.params)
+        .await
+        .unwrap();
+    assert!(outcome.dropped.is_empty());
+    assert_eq!(store.notes().len(), 3);
+    assert_eq!(provider.calls(), 0);
+}
+
+#[tokio::test]
+async fn should_retire_an_already_orphaned_host_correction_without_calling_a_model() {
+    let store = AppStore::new().await;
+    store.seed_memory().await;
+    store
+        .bank
+        .write_staging_note(&StagingNote {
+            origin: octos_memory::NoteOrigin::Host,
+            kind: octos_memory::NoteKind::Correction,
+            content: "Now prefers short chapters.".into(),
+            session_key: None,
+            sensitive: false,
+            replaces_id: Some("^maaaaaa".into()),
+        })
+        .await
+        .unwrap();
+    // Simulate a target deleted by a previous run, leaving its correction behind.
+    std::fs::write(
+        store.params.memory_dir.join("MEMORY.md"),
+        format!(
+            "Likes nature books. (updated: {}) ^mbbbbbb\n",
+            store.params.today
+        ),
+    )
+    .unwrap();
+    let provider = ScriptedMerge::new(vec![]);
+    let outcome = run_consolidation(provider.clone(), &store.params)
+        .await
+        .unwrap();
+    assert!(outcome.errors.is_empty());
+    assert_eq!(outcome.dropped.len(), 1);
+    assert!(store.notes().is_empty());
+    assert_eq!(provider.calls(), 0);
+    run_consolidation(provider.clone(), &store.params)
+        .await
+        .unwrap();
+    assert_eq!(provider.calls(), 0);
+    assert!(
+        store
+            .bank
+            .read_long_term()
+            .await
+            .unwrap()
+            .contains("^mbbbbbb")
+    );
+}
