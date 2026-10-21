@@ -27,6 +27,9 @@ pub mod pending;
 pub mod prompt;
 pub mod staging;
 
+#[cfg(test)]
+mod app_pipeline_tests;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
