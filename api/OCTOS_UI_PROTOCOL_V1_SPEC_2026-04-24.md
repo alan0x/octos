@@ -2343,6 +2343,10 @@ Request/response Rust types live in `crates/octos-core/src/ui_protocol.rs`
   operation/target/content reuse acceptance; different payloads fail with
   `invalid_params` and `data.kind = "request_id_conflict"`. Check retries
   before target existence, so an already honored forget can be retried.
+  A host correction whose target no longer exists in live memory, the archive
+  or pending-confirm candidates is retired before the merge, without a model
+  call; its reason is recorded in the consolidation outcome. Retrying its
+  accepted request does not recreate it.
   Content-free hash receipts survive staging consumption and process restart;
   no automatic receipt expiry is introduced. Prepared notes are private,
   durable before receipts and atomically published into existing staging;

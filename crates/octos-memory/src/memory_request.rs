@@ -45,6 +45,7 @@ impl MemoryStore {
 
     /// Recover/check a prior admission BEFORE checking whether a target still
     /// exists: an already honored forget must be replayable without its target.
+    /// This may publish a previously prepared note; it is not a read-only query.
     pub async fn has_staging_request(&self, request_id: &str, note: &StagingNote) -> Result<bool> {
         self.staging_request(request_id, note, false).await
     }
