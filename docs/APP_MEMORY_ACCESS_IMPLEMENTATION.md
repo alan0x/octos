@@ -95,3 +95,21 @@ app_pipeline_tests` (11), the same command with `memory_` (245),
 `cargo clippy -p octos-cli --features api --lib --tests -- -D warnings`
 (zero warnings), formatting and diff checks. The independent approval applies
 to b0acfe04; the follow-up remains a separate, reviewable commit.
+
+## PR review: protocol change record
+
+Round-1 review on PR #2848 identified missing UPCR coverage for the two new
+wire methods. The local coverage gate reproduced that failure. Added
+[UPCR-2026-052](OCTOS_UI_PROTOCOL_CHANGE_REQUEST_UPCR_2026_052_APP_MEMORY_ACCESS.md),
+its registry row, and a specification cross-reference. The record makes the
+authorization matrix, admission replay/recovery, acknowledgement meaning,
+and promotion-lock/crash boundaries explicit. This follow-up changes only
+documentation; it does not change the reviewed Rust behaviour.
+
+Follow-up checks: `bash scripts/check-ui-protocol-upcr.sh` passed (it failed
+before this addition); `bash scripts/tests/test-check-ui-protocol-upcr.sh`
+passed all 19 scenarios. With Python 3.13, `scripts/lint-upcr-registry.py`
+and `scripts/lint-ui-protocol-inventory.py` passed, including both self-tests.
+New documentation links and `git diff --check` passed. Rust code is unchanged
+by this documentation-only follow-up, so its previously recorded tests and
+Clippy checks were not rerun.

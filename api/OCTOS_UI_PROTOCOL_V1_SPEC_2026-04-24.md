@@ -2321,6 +2321,8 @@ Request/response Rust types live in `crates/octos-core/src/ui_protocol.rs`
 
 #### `memory/request`
 
+Change record: [UPCR-2026-052](../docs/OCTOS_UI_PROTOCOL_CHANGE_REQUEST_UPCR_2026_052_APP_MEMORY_ACCESS.md).
+
 - Gate: `auxiliary.rest_to_ws.v1`. Requires authenticated `/api/my/*`
   profile resolution, exactly as `memory/ingest`. Session-ingress and
   host-managed external credentials cannot use it. Identity, origin, local
